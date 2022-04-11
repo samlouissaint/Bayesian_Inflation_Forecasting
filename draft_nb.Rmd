@@ -1,0 +1,193 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+# Intro
+The project will be using some macroeconomic knowledge, specifically the Monetarist understanding of economic activity. It's defined by a deceivingly simply formula: ${MV = PQ}$  
+According to this definition, M is the money supply, V is the money velocity, P is the price of goods and services, and Q is the quantity of goods and services. Meaning the price of goods can be demonstrated as such: ${P = \frac{MV}{Q}}$  
+In terms of economic indicators measured by the Federal Reserve Bank, this formula is best represented by:  
+**P - Consumer Price Index for All Urban Consumers: All Items in U.S. City Average (though for this investigation we'll be using the percentage change from previous year figures to represent inflationary movements)**  
+**M - Real M2 Money Stock**  
+**V - Velocity of M2 Money Stock**  
+**Q - Real Gross Domestic Product**  
+Luckily, the Fed saved me the trouble of adjusting these figures for CPI myself, and for that I thank them deeply. In terms of a scientific model, there isn't an independent variable we can manipulate freely like in a controlled experiment. However, there is a tool regularly used by the Fed to temper inflation and unemployment, the interest rate. According to macroeconomic theory, increasing interest rates decreases lending/borrowing and thus consumer spending, decreasing inflation at the cost of economic growth. Because it is the only indicator that is so closely related to inflation ***and*** can be directly manipulated --- though often as a response to other economic activity or fiscal policy changes --- it serves as the exposure variable in the following DAG.
+```{r}
+library(dagitty)
+library(ggdag)
+library(tidyverse)
+library(tidybayes)
+library(bsts)
+library(rstan)
+library(modelr)
+library(brms)
+library(gganimate)
+library(cowplot)
+library(ggridges)
+library(colorspace)
+```
+
+
+```{r}
+# NOTE TO RYAN: Let me know if I should have the unobserved variables point towards interest rate as well.
+#I know market activity leads to the decision to change the IR, but I don't know if that's the same as influencing it in a way to portray that in the DAG.
+#If it is, then all of my variables are affected by unobserved variables which isn't ideal but I can work with it either way.
+#And if not, I can include that when I explain my model's weaknesses before continuing.
+
+
+g <- dagitty::dagitty('
+dag {
+bb="0,0,1,1"
+"Other Indicators/Exogenous Shocks" [latent,pos="0.533,0.067"]
+"interest rate" [exposure,pos="0.487,0.541"]
+"money supply" [pos="0.595,0.353"]
+"money velocity" [pos="0.748,0.309"]
+gdp [pos="0.337,0.275"]
+inflation [outcome,pos="0.476,0.270"]
+"Other Indicators/Exogenous Shocks" -> "money supply"
+"Other Indicators/Exogenous Shocks" -> "money velocity"
+"Other Indicators/Exogenous Shocks" -> gdp
+"Other Indicators/Exogenous Shocks" -> inflation
+"interest rate" -> "money supply"
+"interest rate" -> gdp
+"interest rate" -> inflation
+"money supply" -> inflation
+"money velocity" -> "interest rate"
+"money velocity" -> inflation
+gdp -> inflation
+}')
+ggdag::ggdag_status(g, text = FALSE, use_labels = "name") +
+  theme_dag()
+```
+
+# Grabbing data from FRED DATA
+```{r}
+Q = read_csv('gdp.csv', show_col_types = F) %>%
+  filter(DATE >= as.Date('1980-01-01'))
+P = read_csv('inflation_rate.csv', show_col_types = F) %>%
+  filter(DATE >= as.Date('1980-01-01'))
+I = read_csv('interest_rate.csv', show_col_types = F) %>%
+  filter(DATE >= as.Date('1980-01-01')) %>%
+  mutate(DFF = as.double(DFF))
+M = read_csv('money_supply.csv', show_col_types = F) %>%
+  filter(DATE >= as.Date('1980-01-01'))
+V = read_csv('money_velocity.csv', show_col_types = F) %>%
+  filter(DATE >= as.Date('1980-01-01'))
+monthly_train <- P %>% inner_join(I, by = 'DATE') %>% inner_join(M, by = 'DATE') %>% left_join(Q, by = 'DATE') %>% left_join(V, by = 'DATE') %>%
+  rename(P = CPIAUCSL_PC1, I = DFF, M = M2REAL, Q = GDPC1, V = M2V) %>%
+  filter(DATE < as.Date('2012-01-01')) %>%
+  mutate(time = 1:n())
+monthly_test <- P %>% inner_join(I, by = 'DATE') %>% inner_join(M, by = 'DATE') %>% left_join(Q, by = 'DATE') %>% left_join(V, by = 'DATE') %>%
+  rename(P = CPIAUCSL_PC1, I = DFF, M = M2REAL, Q = GDPC1, V = M2V) %>%
+  filter(DATE >= as.Date('2012-01-01'))
+# Warning is for April 2022
+```
+
+# Using bsts
+```{r}
+# Bare bones, only seasonal prior, mostly learning way around bsts
+model_components <- list()
+model_components <- AddSemilocalLinearTrend(model_components, monthly_train$P)
+model_components <- AddSeasonal(model_components, y = monthly_train$P, nseasons = 12)
+fit <- bsts(monthly_train$P, model_components, niter = 2000)
+plot(fit)
+```
+
+# Create Priors about economic indicators and Re-fit
+```{r}
+Pmu <- NormalPrior(2.5, 0.3)
+Psd <- SdPrior(0.2,0.3)
+```
+
+# Prior Predictive Check - Visualize Priors
+```{r}
+
+```
+
+## Iterate, if necessary
+```{r}
+
+```
+
+# Create first model - adding other monthly data
+```{r}
+# Not sure how to add quarterlies yet because of season.duration component in AddSeasonal
+# Will need to figure out so I can stratify by Money Velocity
+model_components <- list()
+model_components <- AddSemilocalLinearTrend(model_components, monthly_train$P, slope.mean.prior = Pmu, slope.sigma.prior = Psd)
+model_components <- AddSeasonal(model_components, y = monthly_train$P, nseasons = 32, season.duration = 12)
+fit2 <- bsts(P~ I, model_components, data = monthly_train, niter = 2000)
+```
+
+
+```{r}
+plot(fit2, 'components')
+pred1 <- predict(fit2, horizon = 12, newdata = Itest$DFF)
+plot(pred1, ylim = c(-20, 20))
+```
+
+```{r}
+forecast_months = 13   # number of months forward to forecast
+set.seed(123456)
+y_max = .2
+y_axis = list(
+  coord_cartesian(ylim = c(0, y_max), expand = FALSE),
+  scale_y_continuous(labels = scales::percent),
+  theme(axis.text.y = element_text(vjust = 0.05))
+)
+title = labs(x = NULL, y = NULL, subtitle = "US inflation over time")
+fits = monthly_train %>%
+  add_draws(plogis(colSums(aperm(fit2$state.contributions, c(2, 1, 3)))))
+
+predictions = monthly_train %$%
+  tibble(
+    date = max(DATE) + months(1:forecast_months),
+    m = month(date),
+    time = max(time) + 1:forecast_months
+  ) %>%
+  add_draws(plogis(predict(fit2, horizon = forecast_months, newdata = monthly_test$I[1:13])$distribution), value = ".prediction")
+
+predictions_with_last_obs = monthly_train %>% 
+  slice(n()) %>% 
+  mutate(.draw = list(1:max(predictions$.draw))) %>% 
+  unnest() %>% 
+  mutate(.prediction = P) %>% 
+  bind_rows(predictions)
+```
+
+```{r}
+#As you can see, these aren't good predictions at all. They cling way too strongly to the priors set around 2%, which I set only because it's the typical benchmark the Fed hopes to hold. I'll be changing the priors.
+monthly_train %>%
+  ggplot(aes(x = time, y = P)) +
+  geom_line(aes(y = .value, group = .draw), alpha = 1/20, data = fits %>% sample_draws(100)) +
+  geom_line(aes(y = .prediction, group = .draw), alpha = 1/20, data = predictions %>% sample_draws(100)) +
+  geom_point()
+```
+
+
+# Convergence Diagnostics (?) or Fake Data Simulation
+```{r}
+
+```
+
+# Posterior Sampling
+```{r}
+
+```
+
+# Trankplots
+```{r}
+
+```
+
+# Stratification for direct and indirect effects
+```{r}
+
+```
+
+
+
+
+
+
+
+
