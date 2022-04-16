@@ -1,6 +1,6 @@
 ---
 title: "R Notebook"
-output: html_notebook
+output:
 ---
 # Intro
 The project will be using some macroeconomic knowledge, specifically the Monetarist understanding of economic activity. It's defined by a deceivingly simply formula: ${MV = PQ}$  
@@ -24,6 +24,7 @@ library(gganimate)
 library(cowplot)
 library(ggridges)
 library(colorspace)
+library(lubridate)
 ```
 
 
@@ -64,38 +65,48 @@ ggdag::ggdag_status(g, text = FALSE, use_labels = "name") +
 Q = read_csv('gdp.csv', show_col_types = F) %>%
   filter(DATE >= as.Date('1980-01-01'))
 P = read_csv('inflation_rate.csv', show_col_types = F) %>%
-  filter(DATE >= as.Date('1980-01-01'))
+  filter(DATE >= as.Date('1980-01-01')) %>%
+  mutate(CPIAUCSL_PC1 = as.double(CPIAUCSL_PC1)/100)
 I = read_csv('interest_rate.csv', show_col_types = F) %>%
   filter(DATE >= as.Date('1980-01-01')) %>%
-  mutate(DFF = as.double(DFF))
+  mutate(DFF = as.double(DFF)/100)
 M = read_csv('money_supply.csv', show_col_types = F) %>%
   filter(DATE >= as.Date('1980-01-01'))
 V = read_csv('money_velocity.csv', show_col_types = F) %>%
   filter(DATE >= as.Date('1980-01-01'))
 monthly_train <- P %>% inner_join(I, by = 'DATE') %>% inner_join(M, by = 'DATE') %>% left_join(Q, by = 'DATE') %>% left_join(V, by = 'DATE') %>%
   rename(P = CPIAUCSL_PC1, I = DFF, M = M2REAL, Q = GDPC1, V = M2V) %>%
-  filter(DATE < as.Date('2012-01-01')) %>%
-  mutate(time = 1:n())
+  filter(DATE < as.Date('2015-01-01')) %>%
+  mutate(time = 1:n(),
+         Q = na.locf(Q),
+         V = na.locf(V),
+         logitP = qlogis(P),
+         m = month(DATE))
 monthly_test <- P %>% inner_join(I, by = 'DATE') %>% inner_join(M, by = 'DATE') %>% left_join(Q, by = 'DATE') %>% left_join(V, by = 'DATE') %>%
   rename(P = CPIAUCSL_PC1, I = DFF, M = M2REAL, Q = GDPC1, V = M2V) %>%
-  filter(DATE >= as.Date('2012-01-01'))
+  filter(DATE >= as.Date('2015-01-01')) %>%
+  mutate(time = 1:n(),
+         Q = na.locf(Q),
+         V = na.locf(V),
+         logitP = qlogis(P),
+         m = month(DATE))
 # Warning is for April 2022
 ```
+
+
 
 # Using bsts
 ```{r}
 # Bare bones, only seasonal prior, mostly learning way around bsts
 model_components <- list()
-model_components <- AddSemilocalLinearTrend(model_components, monthly_train$P)
-model_components <- AddSeasonal(model_components, y = monthly_train$P, nseasons = 12)
-fit <- bsts(monthly_train$P, model_components, niter = 2000)
+model_components <- AddSemilocalLinearTrend(model_components, monthly_train$logitP)
+fit <- bsts(monthly_train$logitP, model_components, niter = 5000)
 plot(fit)
 ```
 
 # Create Priors about economic indicators and Re-fit
 ```{r}
-Pmu <- NormalPrior(2.5, 0.3)
-Psd <- SdPrior(0.2,0.3)
+
 ```
 
 # Prior Predictive Check - Visualize Priors
@@ -113,20 +124,24 @@ Psd <- SdPrior(0.2,0.3)
 # Not sure how to add quarterlies yet because of season.duration component in AddSeasonal
 # Will need to figure out so I can stratify by Money Velocity
 model_components <- list()
-model_components <- AddSemilocalLinearTrend(model_components, monthly_train$P, slope.mean.prior = Pmu, slope.sigma.prior = Psd)
-model_components <- AddSeasonal(model_components, y = monthly_train$P, nseasons = 32, season.duration = 12)
-fit2 <- bsts(P~ I, model_components, data = monthly_train, niter = 2000)
+model_components <- AddLocalLevel(model_components, y =  monthly_train$logitP)
+model_components <- AddSeasonal(model_components, y = monthly_train$logitP, nseasons = 32, season.duration = 4)
+#fit2 <- bsts(logitP~I+V, model_components, niter = 5000, data = monthly_train) the bsts works regardless of what's in the model
+fit2 <- bsts(monthly_train$logitP, model_components, niter = 5000)
 ```
 
 
 ```{r}
 plot(fit2, 'components')
-pred1 <- predict(fit2, horizon = 12, newdata = Itest$DFF)
-plot(pred1, ylim = c(-20, 20))
+pred1 <- predict(fit2, horizon = 12, newdata = monthly_test) #this doesn't work when I add predictors due to 'Non-finite response variable' = logit(inflation) being -Inf
+plot(pred1)
 ```
 
+
+
+
 ```{r}
-forecast_months = 13   # number of months forward to forecast
+forecast_months = 24   # number of months forward to forecast
 set.seed(123456)
 y_max = .2
 y_axis = list(
@@ -135,17 +150,19 @@ y_axis = list(
   theme(axis.text.y = element_text(vjust = 0.05))
 )
 title = labs(x = NULL, y = NULL, subtitle = "US inflation over time")
+```
+
+
+```{r}
 fits = monthly_train %>%
   add_draws(plogis(colSums(aperm(fit2$state.contributions, c(2, 1, 3)))))
-
 predictions = monthly_train %$%
   tibble(
-    date = max(DATE) + months(1:forecast_months),
-    m = month(date),
+    DATE = max(DATE) + months(1:forecast_months),
+    m = month(DATE),
     time = max(time) + 1:forecast_months
   ) %>%
-  add_draws(plogis(predict(fit2, horizon = forecast_months, newdata = monthly_test$I[1:13])$distribution), value = ".prediction")
-
+  add_draws(plogis(predict(fit2, newdata = monthly_test, horizon = forecast_months, burn = burn)$distribution), value = ".prediction")
 predictions_with_last_obs = monthly_train %>% 
   slice(n()) %>% 
   mutate(.draw = list(1:max(predictions$.draw))) %>% 
@@ -157,7 +174,7 @@ predictions_with_last_obs = monthly_train %>%
 ```{r}
 #As you can see, these aren't good predictions at all. They cling way too strongly to the priors set around 2%, which I set only because it's the typical benchmark the Fed hopes to hold. I'll be changing the priors.
 monthly_train %>%
-  ggplot(aes(x = time, y = P)) +
+  ggplot(aes(x = DATE, y = P)) +
   geom_line(aes(y = .value, group = .draw), alpha = 1/20, data = fits %>% sample_draws(100)) +
   geom_line(aes(y = .prediction, group = .draw), alpha = 1/20, data = predictions %>% sample_draws(100)) +
   geom_point()
