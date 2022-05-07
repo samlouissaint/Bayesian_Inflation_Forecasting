@@ -1,6 +1,6 @@
 ---
 title: "R Notebook"
-output:
+output: html
 ---
 # Intro
 The project will be using some macroeconomic knowledge, specifically the Monetarist understanding of economic activity. It's defined by a deceivingly simply formula: ${MV = PQ}$  
@@ -10,8 +10,8 @@ In terms of economic indicators measured by the Federal Reserve Bank, this formu
 **M - Real M2 Money Stock**  
 **V - Velocity of M2 Money Stock**  
 **Q - Real Gross Domestic Product**  
-Luckily, the Fed saved me the trouble of adjusting these figures for CPI myself, and for that I thank them deeply. In terms of a scientific model, there isn't an independent variable we can manipulate freely like in a controlled experiment. However, there is a tool regularly used by the Fed to temper inflation and unemployment, the interest rate. According to macroeconomic theory, increasing interest rates decreases lending/borrowing and thus consumer spending, decreasing inflation at the cost of economic growth. Because it is the only indicator that is so closely related to inflation ***and*** can be directly manipulated --- though often as a response to other economic activity or fiscal policy changes --- it serves as the exposure variable in the following DAG.
-```{r}
+Luckily, the Fed saved me the trouble of adjusting these figures for CPI myself, and for that I thank them deeply. In terms of a scientific model, there isn't an independent variable we can manipulate freely like in a controlled experiment. However, there is a tool regularly used by the Fed to temper inflation and unemployment, the interest rate. According to macroeconomic theory, increasing interest rates decreases lending/borrowing and thus consumer spending, decreasing inflation at the cost of economic growth. Because it is the only indicator that is so closely related to inflation ***and*** can be directly manipulated --- though often as a response to other economic activity or fiscal policy changes --- it serves as the exposure variable in the following directed acyclic graph (DAG).
+```{r, echo=FALSE, warning=FALSE}
 library(dagitty)
 library(ggdag)
 library(tidyverse)
@@ -25,127 +25,187 @@ library(cowplot)
 library(ggridges)
 library(colorspace)
 library(lubridate)
+library(rethinking)
 ```
 
-
-```{r}
-# NOTE TO RYAN: Let me know if I should have the unobserved variables point towards interest rate as well.
-#I know market activity leads to the decision to change the IR, but I don't know if that's the same as influencing it in a way to portray that in the DAG.
-#If it is, then all of my variables are affected by unobserved variables which isn't ideal but I can work with it either way.
-#And if not, I can include that when I explain my model's weaknesses before continuing.
-
-
+```{r, echo=FALSE}
 g <- dagitty::dagitty('
 dag {
 bb="0,0,1,1"
-"Other Indicators/Exogenous Shocks" [latent,pos="0.533,0.067"]
-"interest rate" [exposure,pos="0.487,0.541"]
-"money supply" [pos="0.595,0.353"]
-"money velocity" [pos="0.748,0.309"]
-gdp [pos="0.337,0.275"]
-inflation [outcome,pos="0.476,0.270"]
-"Other Indicators/Exogenous Shocks" -> "money supply"
-"Other Indicators/Exogenous Shocks" -> "money velocity"
-"Other Indicators/Exogenous Shocks" -> gdp
-"Other Indicators/Exogenous Shocks" -> inflation
-"interest rate" -> "money supply"
-"interest rate" -> gdp
-"interest rate" -> inflation
-"money supply" -> inflation
-"money velocity" -> "interest rate"
-"money velocity" -> inflation
-gdp -> inflation
+"I-1" [pos="0.080,0.082"]
+"IR-1" [exposure,pos="0.078,0.219"]
+I [outcome,pos="0.487,0.082"]
+IR [pos="0.487,0.223"]
+M [pos="0.417,0.416"]
+U [latent,pos="0.254,0.539"]
+V [pos="0.282,0.340"]
+gdp [pos="0.248,0.272"]
+"I-1" -> "IR-1"
+"I-1" -> I
+"IR-1" -> I
+"IR-1" -> IR
+"IR-1" -> gdp
+I -> IR
+M -> I
+U -> I
+U -> M
+U -> V
+U -> gdp
+V -> "IR-1"
+V -> I
+gdp -> I
 }')
 ggdag::ggdag_status(g, text = FALSE, use_labels = "name") +
   theme_dag()
 ```
+  
+It is crucial to remember that this model, like all models, is a simplified portrayal of the interactions it is meant to describe. Due to the compounding impacts of exogenous shocks and indicators outside the scope of the model, we cannot model the direct effect of the interest rate on inflation. However, we are able to model the total effect of the interest rate on inflation if we control for money velocity.  
+  
+The next step will be to create our priors and build a generative model. The loop I crafted to do so has its limitations, though I wasn't able to find any functions or loops to use as reference. The goal is to create time series that behave similarly to the indicators they're meant to mimic.
+# Generative Model
+## Forming data from priors
+```{r, echo=FALSE}
+set.seed(9)
+N <- 600 # Number of observations
+time <- seq(1, N, 1) # Time vector
+P <- c(4.5) # "true" mu
+for(i in seq(599)){
+  p <- rnorm(1, mean = P[i], rnorm(1, 0.3,0.1)) # Makes sure next point stems from previous
+  P <- c(P, p)}
+P <- round(P/100, 2)
+plot(time, P, 'l')
 
-# Grabbing data from FRED DATA
+set.seed(18)
+IR <- c(1)
+for(i in seq(599)){
+  ir <- round(rnorm(1, mean = IR[i], 0.05),1)
+  IR <- c(IR, ir)}
+IR <- IR / 100
+plot(time, IR, 'l')
+
+set.seed(4)
+V <- c(2)
+for(i in seq(599)){
+  v <- round(rnorm(1, mean = V[i], 0.04), 2)
+  V <- c(V, v)}
+plot(time, V, 'l')
+```
+  
+Here we have fake data for the indicators going into the model. We use those to model the relationship using the priors we set as well as priors included in the bayesian structure time series (bsts) package.  
+  
+## Prior Predictive Check - Visualize Priors
 ```{r}
-Q = read_csv('gdp.csv', show_col_types = F) %>%
-  filter(DATE >= as.Date('1980-01-01'))
-P = read_csv('inflation_rate.csv', show_col_types = F) %>%
-  filter(DATE >= as.Date('1980-01-01')) %>%
+gm <- cbind.data.frame(time, P, IR, V)
+gm_test <- gm[501:600,]
+gm <- gm[1:500,]
+gmod_components <- list()
+gmod_components <- AddStudentLocalLinearTrend(gmod_components, y = gm$P)
+gmod_components <- AddSeasonal(gmod_components, y = gm$P, nseasons = 50, season.duration = 4)
+gmod <- bsts(P~IR+V, gmod_components, niter = 5000, data = gm)
+
+gpred <- predict(gmod, horizon = 10, gm_test)
+plot(gpred, ylim= c(-0.1, 0.1))
+```
+
+```{r}
+forecast_time = 100
+fits = gm %>%
+  add_draws(colSums(aperm(gmod$state.contributions, c(2, 1, 3))))
+
+predictions = data.frame(time = max(gm$time) + 1:forecast_time) %>%
+  add_draws(predict(gmod, newdata = gm_test, horizon = forecast_time)$distribution, value = ".prediction")
+
+predictions_with_last_obs = gm %>% 
+  slice(n()) %>% 
+  mutate(.draw = list(1:max(predictions$.draw))) %>% 
+  unnest(cols = c(.draw)) %>% 
+  mutate(.prediction = P) %>% 
+  bind_rows(predictions)
+gm %>%
+  ggplot(aes(x = time, y = P)) +
+  geom_line(aes(y = .value, group = .draw), alpha = 1/20, data = fits %>% sample_draws(100)) +
+  geom_line(aes(y = .prediction, group = .draw), alpha = 1/20, data = predictions %>% sample_draws(100)) +
+  geom_point()
+```
+  
+We see from the prior predictives that the model and priors are behaving in a way we'd expect. The values themselves aren't what you'd expect from inflation though this a result of struggling to find rnorm values that looked like the inflation curve. We may attribute the fuzziness in predictions through even the observed time values to the fact that the generated priors aren't actually related. Additionally, seeing such a wide range of prior predicted values is expected and satisfactory for something as unpredictable as the economy.
+  
+  
+With a working set of priors, we can now move onto modeling real data.
+
+# Modeling with Real Data
+```{r}
+# Load data
+gdp_file = "https://github.com/SamL153/bayesian_stats_project/raw/master/gdp.csv"
+inflation_file = "https://github.com/SamL153/bayesian_stats_project/raw/master/inflation_rate.csv"
+interest_file = "https://github.com/SamL153/bayesian_stats_project/raw/master/interest_rate.csv"
+msupply_file = "https://github.com/SamL153/bayesian_stats_project/raw/master/money_supply.csv"
+mvelocity_file = "https://github.com/SamL153/bayesian_stats_project/raw/master/money_velocity.csv"
+Q = read_csv(gdp_file, show_col_types = F) %>%
+  filter(DATE >= as.POSIXlt('1980-01-01'))
+P = read_csv(inflation_file, show_col_types = F) %>%
+  filter(DATE >= as.POSIXlt('1980-01-01')) %>%
   mutate(CPIAUCSL_PC1 = as.double(CPIAUCSL_PC1)/100)
-I = read_csv('interest_rate.csv', show_col_types = F) %>%
-  filter(DATE >= as.Date('1980-01-01')) %>%
+I = read_csv(interest_file, show_col_types = F) %>%
+  filter(DATE >= as.POSIXlt('1980-01-01')) %>%
   mutate(DFF = as.double(DFF)/100)
-M = read_csv('money_supply.csv', show_col_types = F) %>%
-  filter(DATE >= as.Date('1980-01-01'))
-V = read_csv('money_velocity.csv', show_col_types = F) %>%
-  filter(DATE >= as.Date('1980-01-01'))
+M = read_csv(msupply_file, show_col_types = F) %>%
+  filter(DATE >= as.POSIXlt('1980-01-01'))
+V = read_csv(mvelocity_file, show_col_types = F) %>%
+  filter(DATE >= as.POSIXlt('1980-01-01'))
 monthly_train <- P %>% inner_join(I, by = 'DATE') %>% inner_join(M, by = 'DATE') %>% left_join(Q, by = 'DATE') %>% left_join(V, by = 'DATE') %>%
   rename(P = CPIAUCSL_PC1, I = DFF, M = M2REAL, Q = GDPC1, V = M2V) %>%
-  filter(DATE < as.Date('2015-01-01')) %>%
+  filter(DATE < as.POSIXlt('2021-07-01')) %>%
   mutate(time = 1:n(),
          Q = na.locf(Q),
          V = na.locf(V),
-         logitP = qlogis(P),
          m = month(DATE))
 monthly_test <- P %>% inner_join(I, by = 'DATE') %>% inner_join(M, by = 'DATE') %>% left_join(Q, by = 'DATE') %>% left_join(V, by = 'DATE') %>%
   rename(P = CPIAUCSL_PC1, I = DFF, M = M2REAL, Q = GDPC1, V = M2V) %>%
-  filter(DATE >= as.Date('2015-01-01')) %>%
+  filter(DATE >= as.POSIXlt('2021-07-01')) %>%
   mutate(time = 1:n(),
          Q = na.locf(Q),
          V = na.locf(V),
-         logitP = qlogis(P),
          m = month(DATE))
-# Warning is for April 2022
+I_m1_train <- rbind(I[1,], I) %>%
+  filter(DATE < as.POSIXlt('2021-06-01')) %>%
+  rename(I_m1 = DFF)
+I_m1_test <- I %>%
+  filter(DATE >= as.POSIXlt('2021-06-01'), DATE < as.POSIXlt('2022-02-01')) %>%
+  rename(I_m1 = DFF)
+P_m1_train <- read_csv(inflation_file, show_col_types = F) %>%
+  filter(DATE >= as.POSIXlt('1979-12-01'), DATE < as.POSIXlt('2021-06-01')) %>%
+  mutate(CPIAUCSL_PC1 = as.double(CPIAUCSL_PC1)/100) %>%
+  rename(P_m1 = CPIAUCSL_PC1)
+P_m1_test <- (read_csv(inflation_file, show_col_types = F) %>%
+  filter(DATE >= as.POSIXlt('2021-06-01'), DATE < as.POSIXlt('2022-02-01')) %>%
+  mutate(CPIAUCSL_PC1 = as.double(CPIAUCSL_PC1)/100) %>%
+  rename(P_m1 = CPIAUCSL_PC1))
+monthly_train <- cbind(monthly_train, P_m1_train[,2], I_m1_train[,2])
+monthly_test <- cbind(monthly_test, P_m1_test[,2], I_m1_test[,2])
 ```
 
 
-
-# Using bsts
+## Create first model - adding other monthly data
 ```{r}
-# Bare bones, only seasonal prior, mostly learning way around bsts
 model_components <- list()
-model_components <- AddSemilocalLinearTrend(model_components, monthly_train$logitP)
-fit <- bsts(monthly_train$logitP, model_components, niter = 5000)
-plot(fit)
+model_components <- AddStudentLocalLinearTrend(model_components, y =  monthly_train$P)
+model_components <- AddSeasonal(model_components, y = monthly_train$P, nseasons = 41, season.duration = 4)
+model <- bsts(P~I_m1+V, model_components, niter = 10000, data = monthly_train)
 ```
 
-# Create Priors about economic indicators and Re-fit
 ```{r}
-
-```
-
-# Prior Predictive Check - Visualize Priors
-```{r}
-
-```
-
-## Iterate, if necessary
-```{r}
-
-```
-
-# Create first model - adding other monthly data
-```{r}
-# Not sure how to add quarterlies yet because of season.duration component in AddSeasonal
-# Will need to figure out so I can stratify by Money Velocity
-model_components <- list()
-model_components <- AddLocalLevel(model_components, y =  monthly_train$logitP)
-model_components <- AddSeasonal(model_components, y = monthly_train$logitP, nseasons = 32, season.duration = 4)
-#fit2 <- bsts(logitP~I+V, model_components, niter = 5000, data = monthly_train) the bsts works regardless of what's in the model
-fit2 <- bsts(monthly_train$logitP, model_components, niter = 5000)
-```
-
-
-```{r}
-plot(fit2, 'components')
-pred1 <- predict(fit2, horizon = 12, newdata = monthly_test) #this doesn't work when I add predictors due to 'Non-finite response variable' = logit(inflation) being -Inf
+plot(model, 'components')
+pred1 <- predict(model, horizon = 8, newdata = monthly_test)
 plot(pred1)
 ```
 
-
-
-
 ```{r}
-forecast_months = 24   # number of months forward to forecast
+forecast_months = 8 # number of months forward to forecast
 set.seed(123456)
-y_max = .2
+y_max = .1
 y_axis = list(
-  coord_cartesian(ylim = c(0, y_max), expand = FALSE),
+  coord_cartesian(ylim = c(-0.02, y_max), expand = FALSE),
   scale_y_continuous(labels = scales::percent),
   theme(axis.text.y = element_text(vjust = 0.05))
 )
@@ -155,29 +215,108 @@ title = labs(x = NULL, y = NULL, subtitle = "US inflation over time")
 
 ```{r}
 fits = monthly_train %>%
-  add_draws(plogis(colSums(aperm(fit2$state.contributions, c(2, 1, 3)))))
+  add_draws(colSums(aperm(model$state.contributions, c(2, 1, 3))))
 predictions = monthly_train %$%
   tibble(
     DATE = max(DATE) + months(1:forecast_months),
     m = month(DATE),
     time = max(time) + 1:forecast_months
   ) %>%
-  add_draws(plogis(predict(fit2, newdata = monthly_test, horizon = forecast_months, burn = burn)$distribution), value = ".prediction")
+  add_draws(predict(model, newdata = monthly_test, horizon = forecast_months)$distribution, value = ".prediction")
 predictions_with_last_obs = monthly_train %>% 
   slice(n()) %>% 
   mutate(.draw = list(1:max(predictions$.draw))) %>% 
-  unnest() %>% 
+  unnest(cols = c(.draw)) %>% 
   mutate(.prediction = P) %>% 
   bind_rows(predictions)
 ```
 
 ```{r}
-#As you can see, these aren't good predictions at all. They cling way too strongly to the priors set around 2%, which I set only because it's the typical benchmark the Fed hopes to hold. I'll be changing the priors.
 monthly_train %>%
   ggplot(aes(x = DATE, y = P)) +
   geom_line(aes(y = .value, group = .draw), alpha = 1/20, data = fits %>% sample_draws(100)) +
   geom_line(aes(y = .prediction, group = .draw), alpha = 1/20, data = predictions %>% sample_draws(100)) +
   geom_point()
+```
+
+```{r}
+since_year = 2014
+set.seed(123456)
+fit_color = "#3573b9"
+fit_color_fill = hex(mixcolor(.6, sRGB(1,1,1), hex2RGB(fit_color)))
+prediction_color = "#e41a1c"
+prediction_color_fill = hex(mixcolor(.6, sRGB(1,1,1), hex2RGB(prediction_color)))
+
+x_axis = list(
+  scale_x_date(date_breaks = "1 years", labels = year),
+  theme(axis.text.x = element_text(hjust = 0.1))
+)
+arrow_spec = arrow(length = unit(8, "points"), type = "closed")
+fit_annotation = list(
+  annotate("text", x = ymd("2014-04-08"), y = .031, hjust = 0, vjust = 0, lineheight = 1.1,
+    label = 'Uncertainty in what\ninflation'),
+  annotate("text", x = ymd("2014-04-08"), y = .031, hjust = 0, vjust = 0, lineheight = 1.1,
+    label = '\n             was', color = fit_color, fontface = "bold"),
+  annotate("segment", x = ymd("2015-03-01"), xend = ymd("2015-03-01"), y = .03, yend = .001, linejoin = "mitre",
+    color = fit_color, size = 1, arrow = arrow_spec)
+)
+prediction_annotation = list(
+  annotate("text", x = ymd("2020-02-16"), y = .031, hjust = 0, vjust = 0, lineheight = 1.1,
+    label = 'Uncertainty in what \ninflation'),
+  annotate("text", x = ymd("2020-02-16"), y = .031, hjust = 0, vjust = 0, lineheight = 1.1,
+    label = '\n             will be', color = prediction_color, fontface = "bold"),
+  annotate("segment", x = ymd("2021-03-01"), xend = ymd("2021-03-01"), y = .03, yend = .02, linejoin = "mitre",
+    color = prediction_color, size = 1, arrow = arrow_spec)
+)
+
+monthly_train %>%
+  filter(year(DATE) >= since_year) %>%
+  ggplot(aes(x = DATE, y = P)) +
+  geom_line(aes(y = .value, group = .draw), alpha = 1/30, color = fit_color, size = .75, # For each year since 2008, take 100 samples and use those to create lines which are blurred to show what i believe is the posterior predictives for each year.
+    data = fits %>% filter(year(DATE) >= since_year) %>% sample_draws(100)) +
+  geom_line(aes(y = .prediction, group = .draw), alpha = 1/20, color = prediction_color, size = .75, # Does prior predictives based on fit. Clearly they scatter more
+    data = predictions %>% sample_draws(100)) + # point estimates from initial data
+  geom_point(size = 0.75) +
+  fit_annotation +
+  prediction_annotation +
+  y_axis +
+  x_axis +
+  title
+```
+
+```{r}
+monthly_train %>%
+  filter(year(DATE) >= since_year) %>%
+  ggplot(aes(x = DATE, y = P)) +
+  stat_lineribbon(aes(y = .value), fill = adjustcolor(fit_color, alpha.f = .25), color = fit_color, .width = .95,
+    data = fits %>% filter(year(DATE) >= since_year)) +
+  stat_lineribbon(aes(y = .prediction), fill = adjustcolor(prediction_color, alpha.f = .25), color = prediction_color, .width = .95,
+    data = predictions) +
+  geom_line(aes(y= P), data = monthly_test)+
+  geom_point(size = 0.75) +
+  fit_annotation +
+  prediction_annotation +
+  y_axis +
+  x_axis +
+  title
+```
+
+```{r}
+n_bands = 40
+
+monthly_train %>%
+  filter(year(DATE) >= since_year) %>%
+  ggplot(aes(x = DATE, y = P)) +
+  stat_lineribbon(aes(y = .value), fill = fit_color, alpha = 1/n_bands, .width = ppoints(n_bands), 
+    data = fits %>% filter(year(DATE) >= since_year), color = NA) +
+  stat_lineribbon(aes(y = .prediction), fill = prediction_color, alpha = 1/n_bands, .width = ppoints(n_bands),
+    data = predictions, color = NA) +
+  geom_point(size = 0.75) +
+  fit_annotation +
+  prediction_annotation +
+  y_axis +
+  x_axis +
+  title
 ```
 
 
