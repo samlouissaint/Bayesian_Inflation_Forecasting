@@ -147,7 +147,7 @@ P = read_csv(inflation_file, show_col_types = F) %>%
   filter(DATE >= as.POSIXlt('1980-01-01')) %>%
   mutate(CPIAUCSL_PC1 = as.double(CPIAUCSL_PC1)/100)
 I = read_csv(interest_file, show_col_types = F) %>%
-  filter(DATE >= as.POSIXlt('1980-01-01')) %>%
+  filter(DATE >= as.POSIXlt('1980-01-01'), !is.na(DFF)) %>%
   mutate(DFF = as.double(DFF)/100)
 M = read_csv(msupply_file, show_col_types = F) %>%
   filter(DATE >= as.POSIXlt('1980-01-01'))
@@ -156,33 +156,31 @@ V = read_csv(mvelocity_file, show_col_types = F) %>%
 monthly_train <- P %>% inner_join(I, by = 'DATE') %>% inner_join(M, by = 'DATE') %>% left_join(Q, by = 'DATE') %>% left_join(V, by = 'DATE') %>%
   rename(P = CPIAUCSL_PC1, I = DFF, M = M2REAL, Q = GDPC1, V = M2V) %>%
   filter(DATE < as.POSIXlt('2021-07-01')) %>%
-  mutate(time = 1:n(),
-         Q = na.locf(Q),
-         V = na.locf(V),
-         m = month(DATE))
+  mutate(m = month(DATE),
+         V = na.locf(V))
 monthly_test <- P %>% inner_join(I, by = 'DATE') %>% inner_join(M, by = 'DATE') %>% left_join(Q, by = 'DATE') %>% left_join(V, by = 'DATE') %>%
   rename(P = CPIAUCSL_PC1, I = DFF, M = M2REAL, Q = GDPC1, V = M2V) %>%
   filter(DATE >= as.POSIXlt('2021-07-01')) %>%
-  mutate(time = 1:n(),
-         Q = na.locf(Q),
-         V = na.locf(V),
-         m = month(DATE))
+  mutate(m = month(DATE),
+         V = na.locf(V))
 I_m1_train <- rbind(I[1,], I) %>%
   filter(DATE < as.POSIXlt('2021-06-01')) %>%
   rename(I_m1 = DFF)
 I_m1_test <- I %>%
-  filter(DATE >= as.POSIXlt('2021-06-01'), DATE < as.POSIXlt('2022-02-01')) %>%
+  filter(DATE >= as.POSIXlt('2021-06-01'), DATE < as.POSIXlt('2022-03-01')) %>%
   rename(I_m1 = DFF)
 P_m1_train <- read_csv(inflation_file, show_col_types = F) %>%
   filter(DATE >= as.POSIXlt('1979-12-01'), DATE < as.POSIXlt('2021-06-01')) %>%
   mutate(CPIAUCSL_PC1 = as.double(CPIAUCSL_PC1)/100) %>%
   rename(P_m1 = CPIAUCSL_PC1)
 P_m1_test <- (read_csv(inflation_file, show_col_types = F) %>%
-  filter(DATE >= as.POSIXlt('2021-06-01'), DATE < as.POSIXlt('2022-02-01')) %>%
+  filter(DATE >= as.POSIXlt('2021-06-01'), DATE < as.POSIXlt('2022-03-01')) %>%
   mutate(CPIAUCSL_PC1 = as.double(CPIAUCSL_PC1)/100) %>%
   rename(P_m1 = CPIAUCSL_PC1))
-monthly_train <- cbind(monthly_train, P_m1_train[,2], I_m1_train[,2])
-monthly_test <- cbind(monthly_test, P_m1_test[,2], I_m1_test[,2])
+monthly_train <- cbind(monthly_train, P_m1_train[,2], I_m1_train[,2]) %>%
+  mutate(time = 1:n())
+monthly_test <- cbind(monthly_test, P_m1_test[,2], I_m1_test[,2]) %>%
+  mutate(time = 1:n())
 ```
 
 
@@ -196,12 +194,12 @@ model <- bsts(P~I_m1+V, model_components, niter = 10000, data = monthly_train)
 
 ```{r}
 plot(model, 'components')
-pred1 <- predict(model, horizon = 8, newdata = monthly_test)
+pred1 <- predict(model, horizon = 9, newdata = monthly_test)
 plot(pred1)
 ```
 
 ```{r}
-forecast_months = 8 # number of months forward to forecast
+forecast_months = 9 # number of months forward to forecast
 set.seed(123456)
 y_max = .1
 y_axis = list(
