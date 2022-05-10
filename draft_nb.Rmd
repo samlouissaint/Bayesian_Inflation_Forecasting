@@ -1,7 +1,12 @@
 ---
 title: "Uncertainty in Inflation Forecasting Using Bayesian Methods"
 author: Samuel Louissaint
-output: html_document
+output:
+  github_document:
+    toc: true
+    toc_depth: 2
+    fig_width: 5
+    fig_height: 5
 ---
 # Introduction
 The project will be using some macroeconomic knowledge, specifically the Monetarist understanding of economic activity. It's defined by a deceivingly simply formula: ${MV = PQ}$  
@@ -13,7 +18,9 @@ In terms of economic indicators measured by the Federal Reserve Bank, this formu
 **Q - Real Gross Domestic Product**  
 Luckily, the Fed saved me the trouble of adjusting these figures for CPI myself, and for that I thank them deeply. In terms of a scientific model, there isn't an independent variable we can manipulate freely like in a controlled experiment. However, there is a tool regularly used by the Fed to temper inflation and unemployment, the interest rate. According to macroeconomic theory, increasing interest rates decreases lending/borrowing and thus consumer spending, decreasing inflation at the cost of economic growth. Because it is the only indicator that is so closely related to inflation ***and*** can be directly manipulated --- though often as a response to other economic activity or fiscal policy changes --- it serves as the exposure variable in the following directed acyclic graph (DAG).
 ```{r, echo=FALSE, results="hide", warning=FALSE}
-packages <- c('ggdag', 'dagitty', 'tidyverse', 'tidybayes', 'bsts', 'rstan', 'modelr', 'brms', 'gganimate', 'cowplot', 'ggridges', 'colorspace', 'lubridate', 'rethinking')
+packages <- c('ggdag', 'dagitty', 'tidyverse', 'tidybayes', 'bsts', 'rstan', 'modelr', 'brms', 'gganimate', 'cowplot', 'ggridges', 'colorspace', 'lubridate')
+new.packages <- packages[!(packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
 suppressPackageStartupMessages(lapply(packages, library, character.only = T))
 ```
 
