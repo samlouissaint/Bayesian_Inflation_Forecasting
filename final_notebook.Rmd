@@ -9,24 +9,26 @@ output:
     fig_height: 5
 ---
 # Introduction
-The project will be using some macroeconomic knowledge, specifically the Monetarist understanding of economic activity. It's defined by a deceivingly simply formula: ${MV = PQ}$
+The project focused on modeling the movement of inflation over time and required some level of macroeconomic knowledge, specifically the Monetarist understanding of economic activity. It's defined by a deceivingly simply formula:  
+${MV = PQ}$
   
-According to this definition, M is the money supply, V is the money velocity, P is the price of goods and services, and Q is the quantity of goods and services. Meaning the price of goods can be demonstrated as such: ${P = \frac{MV}{Q}}$  
+According to this definition, M is the money supply, V is the money velocity, P is the price of goods and services, and Q is the quantity of goods and services. Meaning the price of goods can be demonstrated as such:
+  
+${P = \frac{MV}{Q}}$  
   
 In terms of economic indicators measured by the Federal Reserve Bank, this formula is best represented by:  
-**P - Consumer Price Index for All Urban Consumers: All Items in U.S. City Average (though for this investigation we'll be using the percentage change from previous year figures to represent inflationary movements)**  
+**P - Consumer Price Index for All Urban Consumers: All Items in U.S. City Average (though for this investigation I used the percentage change from previous year figures to represent inflationary movements)**  
 **M - Real M2 Money Stock**  
 **V - Velocity of M2 Money Stock**  
 **Q - Real Gross Domestic Product**
   
-Luckily, the Fed saved me the trouble of adjusting these figures for CPI myself, and for that I thank them deeply. In terms of a scientific model, there isn't an independent variable we can manipulate freely like in a controlled experiment. However, there is a tool regularly used by the Fed to temper inflation and unemployment, the interest rate. According to macroeconomic theory, increasing interest rates decreases lending/borrowing and thus consumer spending, decreasing inflation at the cost of economic growth. Because it is the only indicator that is so closely related to inflation ***and*** can be directly manipulated --- though often as a response to other economic activity or fiscal policy changes --- it serves as the exposure variable in the following directed acyclic graph (DAG).
+When considering the scientific model of the relationship between these indicators, there isn't an independent variable we can manipulate freely like in a controlled experiment. However, there is a tool regularly used by the Fed to temper inflation and unemployment, the interest rate. According to macroeconomic theory, increasing interest rates decreases lending/borrowing and thus consumer spending, decreasing inflation at the cost of economic growth. Because it is the only indicator that is so closely related to inflation ***and*** can be directly manipulated --- though often as a response to other economic activity or fiscal policy changes --- it serves as the exposure variable in the following directed acyclic graph (DAG).  
 ```{r, echo=FALSE, results="hide", warning=FALSE}
 packages <- c('ggdag', 'dagitty', 'tidyverse', 'tidybayes', 'bsts', 'rstan', 'modelr', 'brms', 'gganimate', 'cowplot', 'ggridges', 'colorspace', 'lubridate')
 new.packages <- packages[!(packages %in% installed.packages()[,"Package"])]
 if(length(new.packages)) install.packages(new.packages)
 suppressPackageStartupMessages(lapply(packages, library, character.only = T))
 ```
-
 ```{r, echo=FALSE, warning=FALSE}
 g <- dagitty::dagitty('
 dag {
@@ -56,8 +58,11 @@ ggdag::ggdag_status(g, text = FALSE, use_labels = "name") +
 It is crucial to remember that this model, like all models, is a simplified portrayal of the interactions it is meant to describe. Due to the compounding impacts of exogenous shocks and indicators outside the scope of the model, we cannot model the direct effect of the interest rate on inflation. However, we are able to model the total effect of the interest rate on inflation if we control for money velocity.  
   
 The next step will be to create our priors and build a generative model. The loop I crafted to do so has its limitations, though I wasn't able to find any functions or loops to use as reference. The goal is to create time series that behaves similarly to the indicators they're meant to mimic.
+   
 # Generative Model
-## Forming data from priors
+  
+## Forming Data from Priors
+  
 ```{r}
 par(mfrow=c(2,2))
 set.seed(9)
@@ -86,7 +91,7 @@ for(i in seq(599)){
 plot(time, V, 'l')
 ```
   
-Here we have simulated data for the indicators going into the model. We use those to model the relationship using the priors we set as well as priors included in the Bayesian structure time series (bsts) package.  
+Here I've simulated data that mimics the movement of the indicators going into the total effect model. In addition to these priors, I used priors included in the Bayesian structure time series (bsts) package.  
   
 ## Prior Predictive Check - Visualize Priors
 ```{r, results='hide'}
@@ -103,7 +108,8 @@ gmod <- bsts(P~IR+V, gmod_components, niter = 5000, data = gm)
 gpred <- predict(gmod, horizon = 10, gm_test)
 plot(gpred, ylim= c(-0.1, 0.1))
 ```
-
+The prior predictive model utilizes the generated priors as well as a student local linear trend. This results in a wider distribution of possible forecasts, effectively compensating for the lack of sophistication within the model.
+  
 ```{r, warning=FALSE}
 forecast_time = 100
 fits = gm %>%
@@ -126,10 +132,9 @@ gm %>%
   ylim(c(-0.06,0.06))
 ```
   
-We see from the prior predictives that the model and priors are behaving in a way we'd expect. The values themselves aren't what you'd expect from inflation though this a result of struggling to find rnorm values that looked like the inflation curve. We may attribute the fuzziness in predictions through even the observed time values to the fact that the generated priors aren't actually related. Additionally, seeing such a wide range of prior predicted values is expected and satisfactory for something as unpredictable as the economy.
+We see from the prior predictives that the model and priors are behaving in a way we'd expect. The values themselves aren't probable, though this is a result of having priors that aren't similar to real inflation curve. We may also attribute the fuzziness in predictions to the fact that the generated priors aren't actually related. Additionally, seeing such a wide range of prior predicted values is expected and satisfactory for something as unpredictable as the economy.
   
-  
-With a working set of priors, we can now move onto modeling real data...or that is what I'd like to say. However, the real economic indicators that the priors represent do not exactly in the way described. Specifically, in terms of timing. The interest rate is a reactive indicator, meaning it moves *because* inflation moved. Thus there was the need to create the DAG below, which introduces the concept of time to the model.
+While a working set of prior is good progress, the scientific model representing the movement of inflation isn't yet prepared for real data. That is to say, the real economic indicators that the priors represent do not interact exactly in the way described. Specifically, in terms of timing. The interest rate is a reactive indicator, meaning it moves *because* inflation moved. Thus I needed to create the DAG below, considers the impact of indicators at a previous point in time.
 
 ```{r, echo=FALSE, warning=FALSE}
 g <- dagitty::dagitty('
@@ -161,6 +166,8 @@ gdp -> P
 ggdag::ggdag_status(g, text = FALSE, use_labels = "name") +
   theme_dag()
 ```
+  
+While this DAG looks much more complex than the previous, it is simply establishing that the previous interest and inflation rates are influencing present indicators. Once again, this is a tremendous oversimplification of the relationship between this indicators and macroeconomics as a whole. However, the model is much more explanatory in how the indicators move over time. In addition, this scientific model is able to measure both the total and direct effect of interest rate on inflation.
   
 # Modeling with Real Data
 ```{r, warning=FALSE}
@@ -213,17 +220,16 @@ monthly_train <- cbind(monthly_train, P_m1_train[,2], I_m1_train[,2]) %>%
 monthly_test <- cbind(monthly_test, P_m1_test[,2], I_m1_test[,2]) %>%
   mutate(time = 1:n())
 ```
-Due to the increased complexity of the scientific model, a few variables need to be created or changed. Including the creation of "T-1" columns, for inflation and interest rates. As well as imputing with "na.spline" for data that only releases figures quarterly.  
+  
+The data of the indicators are pulled at an either monthly or quarterly frequency, depending on what the Federal Reserve has made available. For each of the original indicators, the data ranges from January 1980 to either June 2021 or March 2022. Due to the increased complexity of the scientific model, a few variables needed to be created or changed. This included the creation of "_m1" (or minus 1) columns for inflation and interest rates. As well as imputing with "na.spline" for data that only releases figures quarterly which assumes a linear relationship of indicators between quarterly values. 
   
 ## Fit Model
-The model we will be fitting and analyzing is the total effect of interest rate on inflation, which consists of only the time lagged variables. Additionally, we removed the seasonal trend prior, as it didn't impact the model in a practical or theoretical way.
+The total effect of interest rate on inflation consisted of only the time lagged variables. Additionally, I removed the seasonal trend prior, as it didn't impact the model in a practical or theoretical way.  
 ```{r, results='hide'}
 model_components <- list()
 model_components <- AddStudentLocalLinearTrend(model_components, y =  monthly_train$P)
 model <- bsts(P~I_m1+P_m1, model_components, niter = 5000, data = monthly_train)
 ```
-
-
 ```{r, echo=FALSE}
 forecast_months = 9 # number of months forward to forecast
 set.seed(123456)
@@ -251,7 +257,7 @@ predictions_with_last_obs = monthly_train %>%
   mutate(.prediction = P) %>% 
   bind_rows(predictions)
 ```
-A first glance at the model's predictive ability below shows its effectiveness at plotting both what has been and what may be, though we'll take a closer look at the more recent figures going forward.
+A first glance at the model's predictive ability below shows its effectiveness at plotting both what has been and what may be, though we take a closer look at the more recent figures going forward.  
 ```{r}
 monthly_train %>%
   ggplot(aes(x = DATE, y = P)) +
@@ -261,8 +267,8 @@ monthly_train %>%
   coord_cartesian(ylim = c(-0.02, 0.15))
 ```
 
-# Model Diagnostics
-Unfortunately, the bsts package is relatively small and doesn't have very many diagnostics functions like traceplots and number of effective sample size. However, we are able to judge convergence of the model by estimating the one step ahead prediction error variance by squaring the error provided my the bsts model and plotting. Additionally, we see that we have fairly independent chains seen through the autocorrelation plot.
+## Model Diagnostics
+Unfortunately, the bsts package is relatively small and doesn't have very many diagnostics functions like traceplots and number of effective sample size.  
 ```{r, fig.height=6}
 par(mfrow=c(2,1))
 a <- rowMeans(model$one.step.prediction.errors ^ 2)
@@ -270,8 +276,10 @@ plot(a, type = 'l')
 r <- residuals(model)
 AcfDist(r)
 ```
+  
+Despite this, I was able to judge convergence of the model by estimating the one step ahead prediction error variance by squaring the error provided by the bsts model and plotting it. Additionally, we there's fairly independent chains seen through the autocorrelation plot.
 
-# Posterior Sampling and Updated Priors
+## Posterior Sampling and Visualization
 Moving on, the plot below is the fit and forecast starting from 2014. The points are the actual values from the training set, while the blue line is the posterior predictives of the data, having been trained on it. The more interesting portion is the scattering red lines, which are updated prior predictives based on the model fit thus far.
 ```{r, echo = FALSE}
 since_year = 2014
@@ -289,17 +297,17 @@ x_axis = list(
 monthly_train %>%
   filter(year(DATE) >= since_year) %>%
   ggplot(aes(x = DATE, y = P)) +
-  geom_line(aes(y = .value, group = .draw), alpha = 1/30, color = fit_color, size = .75, # For each year since 2014, take 100 samples and use those to create lines which are blurred to show what i believe is the posterior predictives for each year.
+  geom_line(aes(y = .value, group = .draw), alpha = 1/30, color = fit_color, size = .75,
     data = fits %>% filter(year(DATE) >= since_year) %>% sample_draws(100)) +
-  geom_line(aes(y = .prediction, group = .draw), alpha = 1/20, color = prediction_color, size = .75, # Does prior predictives based on fit. Clearly they scatter more
-    data = predictions %>% sample_draws(100)) + # point estimates from initial data
+  geom_line(aes(y = .prediction, group = .draw), alpha = 1/20, color = prediction_color, size = .75,
+    data = predictions %>% sample_draws(100)) +
   geom_point(size = 0.75) +
   y_axis +
   x_axis +
   title
 ```
 
-This plot was created for a clearer image, as well as a comparison to actual inflation figures during the same period, roughly from July 2021 to February 2022. Due to the use of the Student T distribution, the uncertainty *does* cover the trajectory of the observed inflation. However, it also suspected a somewhat rapid recovery that doesn't look very plausible either.
+The following plot was created for a clearer image, as well as a comparison to actual inflation figures during the same period, July 2021 to February 2022. Due to the use of the Student T distribution, the uncertainty *does* cover the trajectory of the observed inflation. However, it also suspected a somewhat rapid recovery that doesn't look very plausible either.  
 ```{r}
 monthly_train %>%
   filter(year(DATE) >= since_year) %>%
@@ -314,7 +322,9 @@ monthly_train %>%
   x_axis +
   title
 ```
-The plot demonstrates the model fit as usual in blue, though in red shows 50 equally likely points at the specified time. Notice how quickly the wide the dispersion is in the November and February forecasts. Obviously this is typically a sign of low confidence in future values, though the February distribution *does* include the actual inflation rate which was around 0.079.
+  
+The following plot demonstrates the model fit, though in red shows 50 equally likely points at the specified time. Notice how quickly the wide the dispersion is in the November and February forecasts. Obviously this is typically a sign of low confidence in future values, though the February distribution *does* include the actual inflation rate which was around 0.079.
+  
 ```{r, echo = FALSE}
 fit_plot = monthly_train %>%
   filter(year(DATE) >= since_year) %>%
@@ -357,22 +367,22 @@ plot_grid(align = "h", axis = "tb", ncol = 2, rel_widths = c(4, 1),
     predict_plot
   )
 ```
-
+  
 # Stratification and Model Comparison
-The model we've been look at thus far is the total effect of interest rate on inflation rate. Now we'll briefly take a look at the direct effect, which now also stratifies for money velocity, GDP. In addition to this, we'll be developing a model using all of the variables, to see whether this has a positive or negative impact on prediction.
+The model we've been look at thus far is the total effect of interest rate on inflation rate. Now we'll briefly take a look at the direct effect, which now also stratifies for money velocity, GDP. In addition to this, we'll be developing a model using all of the variables, to see whether this has a positive or negative impact on prediction.  
 ```{r, results='hide'}
 direct_model = bsts(P~I_m1+V+P_m1+Q, model_components, niter = 5000, data = monthly_train)
 allvar_model <- bsts(P~I_m1+V+P_m1+M+Q+I, model_components, niter = 5000, data = monthly_train)
 ```
 
-
+The following plot shows a model prediction error comparison. A sizeable gap is apparent between the all_variable model and the others, however the movement of the error remains very similar to the others. This may be indicative of an influential force outside of the models that are impacting each of them in the same way.  
 ```{r, fig.height=6}
 CompareBstsModels(list('Total Effect Model' = model,
                        'Direct Effect Model' = direct_model,
                        'All Var Model' = allvar_model), burn = 200, main = 'Model Prediction Error Comparison')
 ```
 
-This unexpected increase in error may be due largely to what's described in the plots below. You can clearly see that both newer models have a high inclusion probability for money velocity and likely uses it to over-explain variation.
+The unexpected increase in error may be due largely to what's described in the plots below. You can clearly see that both newer models have a high inclusion probability for money velocity and likely uses it to over-explain variation.
 ```{r, echo=FALSE}
 par(mfrow=c(2,2))
 plot(model, 'coefficients', main = 'Total Effect Model')
@@ -380,7 +390,7 @@ plot(direct_model, 'coefficients', main = 'Direct Effect Model')
 plot(allvar_model, 'coefficients', main = 'All Variables')
 ```
 
-Lastly, point estimates aren't quite the best use of Bayesian methods, they're included here. These values describe:  
+Lastly, while point estimates aren't quite the best use of Bayesian methods, they're included here. These values describe:  
 The posterior probability that the variable is positive.  
 The conditional expectation of the coefficient, given inclusion.  
 The conditional standard deviation of the coefficient, given inclusion  
