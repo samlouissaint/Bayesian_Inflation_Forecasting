@@ -257,6 +257,7 @@ predictions_with_last_obs = monthly_train %>%
   mutate(.prediction = P) %>% 
   bind_rows(predictions)
 ```
+  
 A first glance at the model's predictive ability below shows its effectiveness at plotting both what has been and what may be, though we take a closer look at the more recent figures going forward.  
 ```{r}
 monthly_train %>%
@@ -266,7 +267,7 @@ monthly_train %>%
   geom_point()+
   coord_cartesian(ylim = c(-0.02, 0.15))
 ```
-
+  
 ## Model Diagnostics
 Unfortunately, the bsts package is relatively small and doesn't have very many diagnostics functions like traceplots and number of effective sample size.  
 ```{r, fig.height=6}
@@ -278,9 +279,10 @@ AcfDist(r)
 ```
   
 Despite this, I was able to judge convergence of the model by estimating the one step ahead prediction error variance by squaring the error provided by the bsts model and plotting it. Additionally, we there's fairly independent chains seen through the autocorrelation plot.
-
+  
 ## Posterior Sampling and Visualization
-Moving on, the plot below is the fit and forecast starting from 2014. The points are the actual values from the training set, while the blue line is the posterior predictives of the data, having been trained on it. The more interesting portion is the scattering red lines, which are updated prior predictives based on the model fit thus far.
+Moving on, the plot below is the fit and forecast starting from 2014. The points are the actual values from the training set, while the blue line is the posterior predictives of the data, having been trained on it. The more interesting portion is the scattering red lines, which are updated prior predictives based on the model fit thus far.  
+  
 ```{r, echo = FALSE}
 since_year = 2014
 set.seed(123456)
@@ -306,7 +308,7 @@ monthly_train %>%
   x_axis +
   title
 ```
-
+  
 The following plot was created for a clearer image, as well as a comparison to actual inflation figures during the same period, July 2021 to February 2022. Due to the use of the Student T distribution, the uncertainty *does* cover the trajectory of the observed inflation. However, it also suspected a somewhat rapid recovery that doesn't look very plausible either.  
 ```{r}
 monthly_train %>%
@@ -374,14 +376,14 @@ The model we've been look at thus far is the total effect of interest rate on in
 direct_model = bsts(P~I_m1+V+P_m1+Q, model_components, niter = 5000, data = monthly_train)
 allvar_model <- bsts(P~I_m1+V+P_m1+M+Q+I, model_components, niter = 5000, data = monthly_train)
 ```
-
+  
 The following plot shows a model prediction error comparison. A sizeable gap is apparent between the all_variable model and the others, however the movement of the error remains very similar to the others. This may be indicative of an influential force outside of the models that are impacting each of them in the same way.  
 ```{r, fig.height=6}
 CompareBstsModels(list('Total Effect Model' = model,
                        'Direct Effect Model' = direct_model,
                        'All Var Model' = allvar_model), burn = 200, main = 'Model Prediction Error Comparison')
 ```
-
+  
 The unexpected increase in error may be due largely to what's described in the plots below. You can clearly see that both newer models have a high inclusion probability for money velocity and likely uses it to over-explain variation.
 ```{r, echo=FALSE}
 par(mfrow=c(2,2))
@@ -389,12 +391,12 @@ plot(model, 'coefficients', main = 'Total Effect Model')
 plot(direct_model, 'coefficients', main = 'Direct Effect Model')
 plot(allvar_model, 'coefficients', main = 'All Variables')
 ```
-
+  
 Lastly, while point estimates aren't quite the best use of Bayesian methods, they're included here. These values describe:  
-The posterior probability that the variable is positive.  
-The conditional expectation of the coefficient, given inclusion.  
-The conditional standard deviation of the coefficient, given inclusion  
-The posterior probability the variable is included.  
+- The posterior probability that the variable is positive.  
+- The conditional expectation of the coefficient, given inclusion.  
+- The conditional standard deviation of the coefficient, given inclusion  
+- The posterior probability the variable is included.  
 You'll notice that the expected coefficient is positive, which is the opposite of what's expected given prior knowledge of macroeconomics. My best attempt at explaining this would be that the lag used in inflation is simply too short so the model misinterpreted the relationship.
 ```{r}
 summary(model)[6]
